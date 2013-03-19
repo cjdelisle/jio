@@ -4,3 +4,9 @@
 
 #dolphin
 .directory
+
+jio.js
+jio.min.js
+complex_queries.js
+complex_queries.min.js
+src/queries/parser.js
