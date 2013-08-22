@@ -9,7 +9,8 @@
     XMLHttpRequest: true,
     Blob: true,
     FormData: true,
-    window: true
+    window: true,
+    complex_queries
 */
 /**
  * JIO XWiki Storage. Type = 'xwiki'.
@@ -18,7 +19,7 @@
 (function () {
   "use strict";
 
-  var $, store;
+  var $, ComplexQueries, store;
   store = function (spec, my) {
 
     spec = spec || {};
@@ -225,15 +226,16 @@
           xhr.responseType = 'text';
         }
 
-        xhr.onload = function (e) {
+        xhr.onreadystatechange = function (e) {
+          if (xhr.readyState < 4) { return; }
           if (xhr.status === 200) {
             var contentType = xhr.getResponseHeader("Content-Type");
             if (contentType.indexOf(';') > -1) {
               contentType = contentType.substring(0, contentType.indexOf(';'));
             }
-            andThen(xhr.response);
+            andThen(undefined, xhr.responseText);
           } else {
-            andThen(null, {
+            andThen({
               "status": xhr.status,
               "statusText": xhr.statusText,
               "error": "err_network_error",
@@ -273,8 +275,6 @@
               title: doc.title || '',
               xredirect: '',
               language: 'en',
-  //            RequiresHTMLConversion: 'content',
-  //            content_syntax: doc.syntax || 'xwiki/2.1',
               content: doc.content || '',
               xeditaction: 'edit',
               comment: 'Saved by JiO',
@@ -327,7 +327,8 @@
           xhr = new XMLHttpRequest();
           xhr.open('POST', priv.xwikiurl + "/bin/upload/" +
                            parts.space + '/' + parts.page, true);
-          xhr.onload = function (e) {
+          xhr.onreadystatechange = function (e) {
+            if (xhr.readyState < 4) { return; }
             if (xhr.status === 302 || xhr.status === 200) {
               andThen(null);
             } else {
@@ -458,6 +459,94 @@
       return true;
     };
 
+    /**
+     * Convert a JIO query to an XWiki XWQK query.
+     *
+     * @method convertToXWQLQuery
+     * @param {object} the query object
+     * @return {string} an XWiki XWQL query string
+     */
+    priv.convertToXWQLQuery = function (option) {
+      var out = '', i;
+      option.query = complex_queries.QueryFactory.create(option.query || "");
+      if (typeof option.wildcard_character !== 'string') {
+        option.wildcard_character = '%';
+      }
+      function isNumeric(x) {
+        return String(parseFloat(x)) === String(x);
+      }
+      function quote(x) {
+        if (isNumeric(x)) { return x; }
+        return "'" + x.replace(/\\/g, '\\\\').replace(/\'/g, "\\'") + "'";
+      }
+      function parseQuery(q) {
+
+        if (q.operator === '=' &&
+            q.value.indexOf(option.wildcard_character) > -1) {
+          return 'doc.' + q.key + ' LIKE ' + quote(
+            q.value.split(option.wildcard_character).map(
+              function (x) { return x.replace(/%/g, '\\%'); }
+            ).join('%')
+          );
+        }
+
+        switch (q.operator) {
+        case 'AND':
+        case 'OR':
+          return (function () {
+            var out = '', i;
+            for (i = 0; i < q.query_list.length; i += 1) {
+              if (i > 0) { out += ' ' + q.operator + ' '; }
+              out += '(' + parseQuery(q.query_list[i]) + ')';
+            }
+            return out;
+          }());
+
+        case 'NOT':
+          return 'NOT(' + parseQuery(q.query_list[0]) + ')';
+
+        case '=':
+        case '!=':
+        case '<':
+        case '>':
+        case '<=':
+        case '>=':
+          return 'doc.' + q.key + ' ' + q.operator + ' ' + quote(q.value);
+
+        case undefined:
+          return '1=1';
+
+        default:
+          throw new Error("unexpected operator in query " + JSON.stringify(q));
+        }
+      }
+      out = 'WHERE ' + parseQuery(option.query);
+      if (Array.isArray(option.sort_on)) {
+        for (i = 0; i < option.sort_on.length; i += 1) {
+          out += ((i > 0) ? ', ' : ' ORDER BY ') + 'doc.' +
+            option.sort_on[i][0];
+          out += (option.sort_on[i][1] === 'descending') ? ' DESC' : ' ASC';
+        }
+      }
+      return out;
+    };
+
+    /**
+     * Convert a JIO query to an XWiki REST query.
+     *
+     * @method convertToXWikiRestQuery
+     * @param {object} the query object
+     * @return {string} an XWiki REST query URL
+     */
+    priv.convertToXWikiRestQuery = function (option) {
+      var url = priv.xwikiurl + '/rest/wikis/' + priv.wiki + '/query?q=' +
+          encodeURIComponent(priv.convertToXWQLQuery(option)) + '&type=xwql';
+      if (Array.isArray(option.limit)) {
+        url += '&start=' + option.limit[0] + '&number=' + option.limit[1];
+      }
+      return url;
+    };
+
     // ==================== attributes ====================
     // the wiki to store stuff in
     priv.wiki = spec.wiki || 'xwiki';
@@ -468,7 +557,7 @@
 
     // URL location of the wiki, unused since
     // XWiki doesn't currently allow cross-domain requests.
-    priv.xwikiurl = spec.xwikiurl ||
+    priv.xwikiurl = spec.url ||
        window.location.href.replace(/\/xwiki\/bin\//, '/xwiki\n')
          .split('\n')[0];
     // should be: s@/xwiki/bin/.*$@/xwiki@
@@ -481,16 +570,14 @@
     // getAttachment() rather than strings.
     priv.useBlobs = spec.useBlobs || false;
 
-    // If true then Blob objects will be returned by
-    // getAttachment() rather than strings.
-    priv.useBlobs = spec.useBlobs || false;
-
 
     that.specToStore = function () {
       return {
         "username": priv.username,
         "language": priv.language,
-        "xwikiurl": priv.xwikiurl,
+        "url": priv.url,
+        "useBlobs": priv.useBlobs,
+        "formTokenPath": priv.formTokenPath
       };
     };
 
@@ -625,10 +712,10 @@
         // seeking for an attachment
         xwikistorage.getAttachment(command.getDocId(),
                                    command.getAttachmentId(),
-                                   function (attach, err) {
+                                   function (err, attach) {
             if (err) {
               that.error(err);
-            } else if (attach !== null) {
+            } else if (attach !== undefined) {
               that.success(attach);
             } else {
               that.error({
@@ -698,20 +785,88 @@
       }
     };
 
+
+
+    priv.makeAllDocsResponse = function (jqxhr, option) {
+      var rows = [], xd;
+      try {
+        xd = $(jqxhr.responseText);
+        xd.find('searchResult').each(function () {
+          var out = {};
+          if ($(this).find('type').text() !== 'page') { return; }
+          out._last_modified = Date.parse($(this).find('modified').text());
+          out.title = $(this).find('title').text();
+          out._id = [
+            $(this).find('space').text(),
+            $(this).find('pageName').text()
+          ].map(function (x) { return x.replace(/\//, '\\/'); }).join('/');
+          out.author = $(this).find('author').text();
+          out.version = $(this).find('version').text();
+          rows.push(out);
+        });
+      } catch (err) {
+        that.error({
+          status: 500,
+          statusText: "internal error",
+          error: err,
+          message: err.message,
+          reason: ""
+        });
+      }
+      function done() {
+        that.success({total_rows: rows.length, rows: rows, ok: true});
+      }
+      if (!option.include_docs || rows.length === 0) {
+        return done();
+      }
+
+      (function () {
+        var waitingFor = 0, error = false, i;
+        function f(i) {
+          xwikistorage.getItem(rows[i]._id, function (doc, err) {
+            if (error) { return; }
+            if (err) {
+              error = true;
+              that.error(err);
+              return;
+            }
+            $.extend(rows[i], doc);
+            if ((waitingFor -= 1) === 0) { done(); }
+          });
+        }
+        for (i = 0; i < rows.length; i += 1) { f(i); }
+      }());
+    };
+
     /**
      * Get all filenames belonging to a user from the document index
      * @method allDocs
      * @param  {object} command The JIO command
      */
-    that.allDocs = function () {
-      setTimeout(function () {
-        that.error({
-          "status": 405,
-          "statusText": "Method Not Allowed",
-          "error": "method_not_allowed",
-          "message": "Your are not allowed to use this command",
-          "reason": "xwikistorage forbids AllDocs command executions"
-        });
+    that.allDocs = function (command) {
+      var l = {};
+      l.option = command.cloneOption();
+      $.ajax({
+        url: priv.convertToXWikiRestQuery(l.option),
+        type: "GET",
+        async: true,
+        dataType: 'xml',
+
+        // Use complete instead of success and error because phantomjs
+        // sometimes causes error to be called with html return code 200.
+        complete: function (jqxhr) {
+          if (jqxhr.status !== 200) {
+            that.error({
+              "status": jqxhr.status,
+              "statusText": jqxhr.statusText,
+              "error": "",
+              "message": "Failed to run search",
+              "reason": jqxhr.responseText
+            });
+            return;
+          }
+          priv.makeAllDocsResponse(jqxhr, l.option);
+        }
       });
     };
 
@@ -719,13 +874,14 @@
   };
 
   if (typeof (define) === 'function' && define.amd) {
-    define(['jquery', 'jio'], function (jquery, jIO) {
+    define(['jquery', 'complex_queries', 'jio'], function (jquery, cq) {
       $ = jquery;
+      ComplexQueries = cq;
       jIO.addStorageType('xwiki', store);
     });
   } else {
-    jIO.addStorageType('xwiki', store);
     $ = jQuery;
+    ComplexQueries = complex_queries;
+    jIO.addStorageType('xwiki', store);
   }
-
 }());
