@@ -179,13 +179,11 @@
 
         $.ajax({
           url: priv.getDocRestURL(docId),
-          type: "GET",
-          async: true,
           dataType: 'xml',
 
           // Use complete instead of success and error because phantomjs
           // sometimes causes error to be called with html return code 200.
-          complete: function (jqxhr) {
+          complete: function (jqxhr, statusText) {
             if (jqxhr.status === 404) {
               andThen(null, null);
               return;
@@ -193,7 +191,7 @@
             if (jqxhr.status !== 200) {
               andThen(null, {
                 "status": jqxhr.status,
-                "statusText": jqxhr.statusText,
+                "statusText": statusText,
                 "error": "",
                 "message": "Failed to get document [" + docId + "]",
                 "reason": ""
@@ -233,7 +231,8 @@
             if (contentType.indexOf(';') > -1) {
               contentType = contentType.substring(0, contentType.indexOf(';'));
             }
-            andThen(undefined, xhr.responseText);
+            andThen(undefined,
+                    (priv.useBlobs) ? xhr.response : xhr.responseText);
           } else {
             andThen({
               "status": xhr.status,
@@ -834,7 +833,7 @@
             if ((waitingFor -= 1) === 0) { done(); }
           });
         }
-        for (i = 0; i < rows.length; i += 1) { f(i); }
+        for (i = 0; i < rows.length; i += 1) { waitingFor += 1; f(i); }
       }());
     };
 
