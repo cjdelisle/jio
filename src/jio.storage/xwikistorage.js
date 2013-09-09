@@ -16,11 +16,16 @@
  * JIO XWiki Storage. Type = 'xwiki'.
  * XWiki Document/Attachment storage.
  */
-(function () {
+(function (dependencies, module) {
+  "use strict";
+  if (typeof define === 'function' && define.amd) {
+    return define(dependencies, module);
+  }
+  module(jQuery, jIO, complex_queries);
+}(['jquery', 'jio', 'complex_queries'], function ($, jIO, ComplexQueries) {
   "use strict";
 
-  var $, ComplexQueries, store;
-  store = function (spec, my) {
+  jIO.addStorageType('xwiki', function (spec, my) {
 
     spec = spec || {};
     var that, priv, xwikistorage;
@@ -870,17 +875,5 @@
     };
 
     return that;
-  };
-
-  if (typeof (define) === 'function' && define.amd) {
-    define(['jquery', 'complex_queries', 'jio'], function (jquery, cq) {
-      $ = jquery;
-      ComplexQueries = cq;
-      jIO.addStorageType('xwiki', store);
-    });
-  } else {
-    $ = jQuery;
-    ComplexQueries = complex_queries;
-    jIO.addStorageType('xwiki', store);
-  }
-}());
+  });
+}));
